@@ -1,0 +1,195 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: secretcopies.twinward.io
+spec:
+  group: twinward.io
+  scope: Cluster
+  names:
+    plural: secretcopies
+    singular: secretcopy
+    kind: SecretCopy
+    listKind: SecretCopyList
+    shortNames:
+      - scopy
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Source
+          type: string
+          jsonPath: .spec.source.name
+        - name: Target
+          type: string
+          jsonPath: .spec.target.name
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          description: >-
+            SecretCopy continuously copies the type and data of one UID-pinned
+            source Secret into one target Secret created and owned by Twinward.
+            It is cluster-scoped and intended to be managed centrally by the
+            platform engineering team.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: >-
+                Desired source-to-target Secret copy. The target reference is
+                immutable after creation.
+              type: object
+              required:
+                - source
+                - target
+              x-kubernetes-validations:
+                - rule: "self.target == oldSelf.target"
+                  message: target is immutable; create a new SecretCopy instead
+              properties:
+                source:
+                  description: >-
+                    Exact source Secret to copy. Namespace and name locate the
+                    object; UID prevents a deleted source from being silently
+                    replaced by a new Secret with the same name.
+                  type: object
+                  required:
+                    - namespace
+                    - name
+                    - uid
+                  properties:
+                    namespace:
+                      description: Namespace containing the source Secret.
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                    name:
+                      description: Name of the source Secret.
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                    uid:
+                      description: >-
+                        Immutable Kubernetes UID of the approved source Secret.
+                        Update this field explicitly to approve a source that
+                        was deleted and recreated.
+                      type: string
+                      minLength: 1
+                      maxLength: 128
+                target:
+                  description: >-
+                    Secret Twinward creates and continuously synchronizes. It
+                    must not exist before the first reconciliation and is never
+                    adopted.
+                  type: object
+                  required:
+                    - namespace
+                    - name
+                  properties:
+                    namespace:
+                      description: Namespace in which Twinward creates the target Secret.
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                    name:
+                      description: >-
+                        Name assigned to the target Secret. A Secret with this
+                        namespace and name must not already exist.
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+            status:
+              description: >-
+                Observed identities and latest reconciliation result. This
+                field is maintained by Twinward.
+              type: object
+              properties:
+                observedGeneration:
+                  description: SecretCopy generation reflected by this status.
+                  type: integer
+                  format: int64
+                sourceUID:
+                  description: >-
+                    UID currently observed on the configured source name. It
+                    differs from spec.source.uid when Ready has reason
+                    SourceUIDMismatch.
+                  type: string
+                targetUID:
+                  description: >-
+                    UID of the target created by Twinward. Twinward refuses to
+                    adopt or synchronize a target with another UID.
+                  type: string
+                lastSyncTime:
+                  description: >-
+                    Time Twinward most recently created or updated the target
+                    successfully.
+                  type: string
+                  format: date-time
+                conditions:
+                  description: >-
+                    Current reconciliation conditions. Ready=True means the
+                    managed target was created, updated, or is already in sync.
+                    Ready=False reasons include InvalidSpec, SourceNotFound,
+                    SourceUIDMismatch, SourceNamespaceNotAllowed,
+                    TargetNamespaceNotAllowed, TargetAlreadyExists,
+                    TargetOwnershipMismatch, TargetUIDMismatch,
+                    TargetImmutable, and API operation failures.
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - type
+                  items:
+                    description: Details for one aspect of the current state.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: Time the condition last changed status.
+                        type: string
+                        format: date-time
+                      message:
+                        description: Human-readable details about the current state.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: SecretCopy generation evaluated for this condition.
+                        type: integer
+                        format: int64
+                      reason:
+                        description: Machine-readable reason for the condition state.
+                        type: string
+                        minLength: 1
+                        maxLength: 1024
+                      status:
+                        description: Condition state.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: Condition type. Twinward currently reports Ready.
+                        type: string
+                        minLength: 1
+                        maxLength: 316

@@ -1,0 +1,5 @@
+.gocache/
+.gotmp/
+bin/
+dist/
+*.test
