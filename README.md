@@ -130,3 +130,24 @@ Optional Prometheus Operator integration:
 ```sh
 kubectl apply -f config/servicemonitor.yaml
 ```
+
+## Container Releases
+
+Pushing a Git tag publishes a multi-platform image to:
+
+```text
+ghcr.io/OWNER/REPOSITORY:GIT_TAG
+```
+
+The workflow publishes no `latest` tag and refuses to replace an image tag that
+already exists. Git tags must also be valid OCI tags, for example `v1.2.3`.
+
+OCI tags are references and can be changed outside the workflow. For deployment,
+use the digest reported in the workflow summary:
+
+```text
+ghcr.io/OWNER/REPOSITORY@sha256:...
+```
+
+Enable immutable releases in the GitHub repository settings to prevent release
+tags from being moved or reused.

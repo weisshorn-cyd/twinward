@@ -63,7 +63,7 @@ spec:
       serviceAccountName: twinward
       containers:
         - name: manager
-          image: ghcr.io/twinward/twinward:latest
+          image: ghcr.io/weisshorn-cyd/twinward:REPLACE_WITH_RELEASE_TAG
           imagePullPolicy: IfNotPresent
           args:
             - --metrics-bind-address=:8080
