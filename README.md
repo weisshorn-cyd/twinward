@@ -141,6 +141,7 @@ ghcr.io/OWNER/REPOSITORY:GIT_TAG
 
 The workflow publishes no `latest` tag and refuses to replace an image tag that
 already exists. Git tags must also be valid OCI tags, for example `v1.2.3`.
+BuildKit publishes an OCI SBOM and provenance alongside the image.
 
 OCI tags are references and can be changed outside the workflow. For deployment,
 use the digest reported in the workflow summary:
