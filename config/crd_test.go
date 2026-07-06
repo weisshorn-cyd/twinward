@@ -66,17 +66,21 @@ func Test_crd(t *testing.T) {
 	assertEqual(t, "spec.versions[0].name", crd.Spec.Versions[0].Name, twinwardv1alpha1.Version)
 
 	specSchema := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
-	if len(specSchema.XValidations) != 1 {
-		t.Fatalf("len(spec x-kubernetes-validations) = %d, want 1", len(specSchema.XValidations))
+	if len(specSchema.XValidations) != 0 {
+		t.Fatalf("len(spec x-kubernetes-validations) = %d, want 0", len(specSchema.XValidations))
 	}
-	assertEqual(
-		t,
-		"target immutability rule",
-		specSchema.XValidations[0].Rule,
-		"self.target.namespace == oldSelf.target.namespace && self.target.name == oldSelf.target.name",
-	)
 
 	targetSchema := specSchema.Properties["target"]
+	for _, field := range []string{"namespace", "name"} {
+		t.Run(field+" immutability", func(t *testing.T) {
+			property := targetSchema.Properties[field]
+			if len(property.XValidations) != 1 {
+				t.Fatalf("len(target.%s x-kubernetes-validations) = %d, want 1", field, len(property.XValidations))
+			}
+			assertEqual(t, "target."+field+" immutability rule", property.XValidations[0].Rule, "self == oldSelf")
+		})
+	}
+
 	for _, field := range []string{"labels", "annotations"} {
 		t.Run(field, func(t *testing.T) {
 			property := targetSchema.Properties[field]

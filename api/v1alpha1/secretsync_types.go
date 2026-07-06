@@ -31,11 +31,13 @@ type TargetSecretReference struct {
 	// Namespace is the namespace in which Twinward creates the target Secret.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="target namespace is immutable; create a new SecretSync instead"
 	Namespace string `json:"namespace"`
 	// Name is the name Twinward gives the target Secret. A Secret with this name
 	// must not already exist.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="target name is immutable; create a new SecretSync instead"
 	Name string `json:"name"`
 	// Labels defines labels to set on or remove from the target Secret. A
 	// non-null value sets the label; null removes it. Labels not listed here
@@ -50,7 +52,6 @@ type TargetSecretReference struct {
 }
 
 // SecretSyncSpec defines one centrally approved source-to-target relationship.
-// +kubebuilder:validation:XValidation:rule="self.target.namespace == oldSelf.target.namespace && self.target.name == oldSelf.target.name",message="target namespace and name are immutable; create a new SecretSync instead"
 type SecretSyncSpec struct {
 	// Source identifies the exact Secret whose type and data are copied.
 	Source SourceSecretReference `json:"source"`

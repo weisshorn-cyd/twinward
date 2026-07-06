@@ -60,9 +60,6 @@ spec:
               required:
                 - source
                 - target
-              x-kubernetes-validations:
-                - rule: "self.target.namespace == oldSelf.target.namespace && self.target.name == oldSelf.target.name"
-                  message: target namespace and name are immutable; create a new SecretSync instead
               properties:
                 source:
                   description: >-
@@ -108,6 +105,9 @@ spec:
                       type: string
                       minLength: 1
                       maxLength: 63
+                      x-kubernetes-validations:
+                        - rule: "self == oldSelf"
+                          message: target namespace is immutable; create a new SecretSync instead
                     name:
                       description: >-
                         Name assigned to the target Secret. A Secret with this
@@ -115,6 +115,9 @@ spec:
                       type: string
                       minLength: 1
                       maxLength: 253
+                      x-kubernetes-validations:
+                        - rule: "self == oldSelf"
+                          message: target name is immutable; create a new SecretSync instead
                     labels:
                       description: >-
                         Labels to set on or remove from the target Secret. A
