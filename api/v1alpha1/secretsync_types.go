@@ -5,6 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// ReadyCondition is the condition type reporting the latest synchronization result.
 const ReadyCondition = "Ready"
 
 // SourceSecretReference identifies the exact source Secret approved for copying.
@@ -36,22 +37,33 @@ type TargetSecretReference struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
+	// Labels defines labels to set on or remove from the target Secret. A
+	// non-null value sets the label; null removes it. Labels not listed here
+	// are preserved.
+	// +optional
+	Labels map[string]*string `json:"labels,omitempty"`
+	// Annotations defines annotations to set on or remove from the target
+	// Secret. A non-null value sets the annotation; null removes it.
+	// Annotations not listed here are preserved.
+	// +optional
+	Annotations map[string]*string `json:"annotations,omitempty"`
 }
 
-// SecretCopySpec defines one centrally approved source-to-target relationship.
-// +kubebuilder:validation:XValidation:rule="self.target == oldSelf.target",message="target is immutable; create a new SecretCopy instead"
-type SecretCopySpec struct {
+// SecretSyncSpec defines one centrally approved source-to-target relationship.
+// +kubebuilder:validation:XValidation:rule="self.target.namespace == oldSelf.target.namespace && self.target.name == oldSelf.target.name",message="target namespace and name are immutable; create a new SecretSync instead"
+type SecretSyncSpec struct {
 	// Source identifies the exact Secret whose type and data are copied.
 	Source SourceSecretReference `json:"source"`
 	// Target identifies the Secret created and continuously synchronized by
-	// Twinward. The target reference is immutable.
+	// Twinward. Its namespace and name are immutable; its metadata directives
+	// can be updated.
 	Target TargetSecretReference `json:"target"`
 }
 
-// SecretCopyStatus reports the observed source, managed target, and latest
+// SecretSyncStatus reports the observed source, managed target, and latest
 // synchronization result.
-type SecretCopyStatus struct {
-	// ObservedGeneration is the SecretCopy generation reflected by this status.
+type SecretSyncStatus struct {
+	// ObservedGeneration is the SecretSync generation reflected by this status.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// SourceUID is the UID observed on the source name. It can differ from
 	// spec.source.uid when the Ready reason is SourceUIDMismatch.
@@ -66,27 +78,28 @@ type SecretCopyStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// SecretCopy continuously copies one UID-pinned source Secret into one
-// controller-owned target Secret. SecretCopy is cluster-scoped and intended to
+// SecretSync continuously copies one UID-pinned source Secret into one
+// controller-owned target Secret. SecretSync is cluster-scoped and intended to
 // be managed by platform engineering.
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Cluster,shortName=scopy
+// +kubebuilder:resource:scope=Cluster,shortName=ssync
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Reason",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
 // +kubebuilder:printcolumn:name="Source",type="string",JSONPath=".spec.source.name"
 // +kubebuilder:printcolumn:name="Target",type="string",JSONPath=".spec.target.name"
-type SecretCopy struct {
+type SecretSync struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   SecretCopySpec   `json:"spec"`
-	Status SecretCopyStatus `json:"status,omitempty"`
+	Spec   SecretSyncSpec   `json:"spec"`
+	Status SecretSyncStatus `json:"status,omitempty"`
 }
 
+// SecretSyncList contains a list of SecretSync resources.
 // +kubebuilder:object:root=true
-type SecretCopyList struct {
+type SecretSyncList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []SecretCopy `json:"items"`
+	Items           []SecretSync `json:"items"`
 }

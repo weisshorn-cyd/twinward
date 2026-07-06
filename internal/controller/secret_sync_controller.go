@@ -1,3 +1,4 @@
+// Package controller reconciles Twinward API resources.
 package controller
 
 import (
@@ -19,7 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -36,9 +37,9 @@ const (
 	contentHashSaltSize = 32
 	managedByLabel      = "app.kubernetes.io/managed-by"
 	managedByValue      = "twinward"
-	lastSyncHash        = "twinward.io/last-sync-hash"
-	lastSyncSource      = "twinward.io/last-sync-source"
-	lastSyncSourceUID   = "twinward.io/last-sync-source-uid"
+	lastSyncHash        = twinwardv1alpha1.GroupName + "/last-sync-hash"
+	lastSyncSource      = twinwardv1alpha1.GroupName + "/last-sync-source"
+	lastSyncSourceUID   = twinwardv1alpha1.GroupName + "/last-sync-source-uid"
 
 	sourceSecretIndex = "spec.sourceSecret"
 	targetSecretIndex = "spec.targetSecret"
@@ -65,14 +66,14 @@ var (
 	syncAttempts = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "twinward_secret_sync_attempts_total",
-			Help: "Total number of Secret copy attempts by result and reason.",
+			Help: "Total number of Secret synchronization attempts by result and reason.",
 		},
 		[]string{"result", "reason"},
 	)
 	namespaceSkips = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "twinward_namespace_skips_total",
-			Help: "Total number of skipped SecretCopy reconciliations because a namespace is not allowed.",
+			Help: "Total number of skipped SecretSync reconciliations because a namespace is not allowed.",
 		},
 		[]string{"role"},
 	)
@@ -82,11 +83,12 @@ func init() {
 	metrics.Registry.MustRegister(syncAttempts, namespaceSkips)
 }
 
-type SecretCopyReconciler struct {
+// SecretSyncReconciler synchronizes one source Secret into an owned target Secret.
+type SecretSyncReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
 	NamespacePolicy config.NamespacePolicy
-	Recorder        record.EventRecorder
+	Recorder        events.EventRecorder
 	ContentHashSalt []byte
 }
 
@@ -99,38 +101,39 @@ func NewContentHashSalt() ([]byte, error) {
 	return salt, nil
 }
 
-func (r *SecretCopyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logging.FromContext(ctx).With("secretCopy", req.Name)
+// Reconcile brings a SecretSync target into its declared state.
+func (r *SecretSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := logging.FromContext(ctx).With("secretSync", req.Name)
 
-	var secretCopy twinwardv1alpha1.SecretCopy
-	if err := r.Get(ctx, req.NamespacedName, &secretCopy); err != nil {
+	var secretSync twinwardv1alpha1.SecretSync
+	if err := r.Get(ctx, req.NamespacedName, &secretSync); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	sourceRef := secretCopy.Spec.Source
-	targetRef := secretCopy.Spec.Target
+	sourceRef := secretSync.Spec.Source
+	targetRef := secretSync.Spec.Target
 	if sourceRef.Namespace == "" || sourceRef.Name == "" || sourceRef.UID == "" ||
 		targetRef.Namespace == "" || targetRef.Name == "" ||
 		(sourceRef.Namespace == targetRef.Namespace && sourceRef.Name == targetRef.Name) {
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonInvalidSpec,
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonInvalidSpec,
 			"source and target must be distinct and include namespace and name; source UID is required",
-			secretCopy.Status.SourceUID, secretCopy.Status.TargetUID, false)
+			secretSync.Status.SourceUID, secretSync.Status.TargetUID, false)
 	}
 
 	if !r.NamespacePolicy.Allows(sourceRef.Namespace) {
 		namespaceSkips.WithLabelValues("source").Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonSourceNamespaceNotAllowed,
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonSourceNamespaceNotAllowed,
 			fmt.Sprintf("source namespace %q is not allowed", sourceRef.Namespace),
-			secretCopy.Status.SourceUID, secretCopy.Status.TargetUID, false)
+			secretSync.Status.SourceUID, secretSync.Status.TargetUID, false)
 	}
 	if !r.NamespacePolicy.Allows(targetRef.Namespace) {
 		namespaceSkips.WithLabelValues("target").Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonTargetNamespaceNotAllowed,
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonTargetNamespaceNotAllowed,
 			fmt.Sprintf("target namespace %q is not allowed", targetRef.Namespace),
-			secretCopy.Status.SourceUID, secretCopy.Status.TargetUID, false)
+			secretSync.Status.SourceUID, secretSync.Status.TargetUID, false)
 	}
 
 	sourceKey := types.NamespacedName{Namespace: sourceRef.Namespace, Name: sourceRef.Name}
@@ -138,36 +141,36 @@ func (r *SecretCopyReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Get(ctx, sourceKey, &source); err != nil {
 		if apierrors.IsNotFound(err) {
 			syncAttempts.WithLabelValues("blocked", reasonSourceNotFound).Inc()
-			return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonSourceNotFound,
-				fmt.Sprintf("source Secret %s was not found", sourceKey.String()), "", secretCopy.Status.TargetUID, false)
+			return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonSourceNotFound,
+				fmt.Sprintf("source Secret %s was not found", sourceKey.String()), "", secretSync.Status.TargetUID, false)
 		}
 		syncAttempts.WithLabelValues("error", reasonSourceGetFailed).Inc()
-		statusErr := r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonSourceGetFailed,
-			fmt.Sprintf("failed to read source Secret %s", sourceKey.String()), "", secretCopy.Status.TargetUID, false)
+		statusErr := r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonSourceGetFailed,
+			fmt.Sprintf("failed to read source Secret %s", sourceKey.String()), "", secretSync.Status.TargetUID, false)
 		return ctrl.Result{}, errors.Join(err, statusErr)
 	}
 
 	if source.UID != sourceRef.UID {
 		syncAttempts.WithLabelValues("blocked", reasonSourceUIDMismatch).Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonSourceUIDMismatch,
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonSourceUIDMismatch,
 			fmt.Sprintf("source Secret %s has UID %q, expected %q", sourceKey.String(), source.UID, sourceRef.UID),
-			source.UID, secretCopy.Status.TargetUID, false)
+			source.UID, secretSync.Status.TargetUID, false)
 	}
 
 	targetKey := types.NamespacedName{Namespace: targetRef.Namespace, Name: targetRef.Name}
 	var target corev1.Secret
 	if err := r.Get(ctx, targetKey, &target); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.createTarget(ctx, log, &secretCopy, &source)
+			return r.createTarget(ctx, log, &secretSync, &source)
 		}
 		syncAttempts.WithLabelValues("error", reasonTargetGetFailed).Inc()
-		statusErr := r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonTargetGetFailed,
+		statusErr := r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonTargetGetFailed,
 			fmt.Sprintf("failed to read target Secret %s", targetKey.String()),
-			source.UID, secretCopy.Status.TargetUID, false)
+			source.UID, secretSync.Status.TargetUID, false)
 		return ctrl.Result{}, errors.Join(err, statusErr)
 	}
 
-	if !metav1.IsControlledBy(&target, &secretCopy) {
+	if !metav1.IsControlledBy(&target, &secretSync) {
 		reason := reasonTargetAlreadyExists
 		message := fmt.Sprintf("target Secret %s already exists and will not be adopted", targetKey.String())
 		if controller := metav1.GetControllerOf(&target); controller != nil {
@@ -176,43 +179,45 @@ func (r *SecretCopyReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				targetKey.String(), controller.Kind, controller.Name, controller.UID)
 		}
 		syncAttempts.WithLabelValues("blocked", reason).Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reason, message,
-			source.UID, secretCopy.Status.TargetUID, false)
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reason, message,
+			source.UID, secretSync.Status.TargetUID, false)
 	}
 
-	if secretCopy.Status.TargetUID == "" {
+	if secretSync.Status.TargetUID == "" {
 		syncAttempts.WithLabelValues("blocked", reasonTargetAlreadyExists).Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonTargetAlreadyExists,
-			fmt.Sprintf("target Secret %s exists with no UID recorded in SecretCopy status and will not be adopted",
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonTargetAlreadyExists,
+			fmt.Sprintf("target Secret %s exists with no UID recorded in SecretSync status and will not be adopted",
 				targetKey.String()), source.UID, "", false)
 	}
 
-	if target.UID != secretCopy.Status.TargetUID {
+	if target.UID != secretSync.Status.TargetUID {
 		syncAttempts.WithLabelValues("blocked", reasonTargetUIDMismatch).Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonTargetUIDMismatch,
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonTargetUIDMismatch,
 			fmt.Sprintf("target Secret %s has UID %q, expected previously recorded UID %q",
-				targetKey.String(), target.UID, secretCopy.Status.TargetUID),
-			source.UID, secretCopy.Status.TargetUID, false)
+				targetKey.String(), target.UID, secretSync.Status.TargetUID),
+			source.UID, secretSync.Status.TargetUID, false)
 	}
 
-	if equalSecretContent(&source, &target) {
+	contentInSync := equalSecretContent(&source, &target)
+	metadataInSync := metadataDirectivesMatch(&target, secretSync.Spec.Target)
+	if contentInSync && metadataInSync {
 		syncAttempts.WithLabelValues("success", reasonInSync).Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionTrue, reasonInSync,
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionTrue, reasonInSync,
 			fmt.Sprintf("target Secret %s is in sync", targetKey.String()), source.UID, target.UID, false)
 	}
 
-	if target.Immutable != nil && *target.Immutable {
+	if !contentInSync && target.Immutable != nil && *target.Immutable {
 		syncAttempts.WithLabelValues("blocked", reasonTargetImmutable).Inc()
-		return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonTargetImmutable,
+		return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonTargetImmutable,
 			fmt.Sprintf("target Secret %s is immutable and differs from the source", targetKey.String()),
 			source.UID, target.UID, false)
 	}
 
 	updated := target.DeepCopy()
-	applySourceContent(updated, &source, r.ContentHashSalt)
+	applySourceContent(updated, &source, secretSync.Spec.Target, r.ContentHashSalt)
 	if err := r.Patch(ctx, updated, client.MergeFromWithOptions(&target, client.MergeFromWithOptimisticLock{})); err != nil {
 		syncAttempts.WithLabelValues("error", reasonTargetUpdateFailed).Inc()
-		statusErr := r.setReady(ctx, &secretCopy, metav1.ConditionFalse, reasonTargetUpdateFailed,
+		statusErr := r.setReady(ctx, &secretSync, metav1.ConditionFalse, reasonTargetUpdateFailed,
 			fmt.Sprintf("failed to update target Secret %s", targetKey.String()), source.UID, target.UID, false)
 		return ctrl.Result{}, errors.Join(err, statusErr)
 	}
@@ -220,21 +225,29 @@ func (r *SecretCopyReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	log.InfoContext(ctx, "synchronized target Secret", "source", sourceKey.String(), "target", targetKey.String())
 	syncAttempts.WithLabelValues("success", reasonTargetUpdated).Inc()
 	if r.Recorder != nil {
-		r.Recorder.Eventf(updated, corev1.EventTypeNormal, "SecretSynced", "Copied content from %s", sourceKey.String())
+		r.Recorder.Eventf(
+			updated,
+			nil,
+			corev1.EventTypeNormal,
+			"SecretSynced",
+			"Sync",
+			"Copied content from %s",
+			sourceKey.String(),
+		)
 	}
-	return ctrl.Result{}, r.setReady(ctx, &secretCopy, metav1.ConditionTrue, reasonTargetUpdated,
+	return ctrl.Result{}, r.setReady(ctx, &secretSync, metav1.ConditionTrue, reasonTargetUpdated,
 		fmt.Sprintf("synchronized target Secret %s", targetKey.String()), source.UID, updated.UID, true)
 }
 
-func (r *SecretCopyReconciler) createTarget(
+func (r *SecretSyncReconciler) createTarget(
 	ctx context.Context,
 	log *slog.Logger,
-	secretCopy *twinwardv1alpha1.SecretCopy,
+	secretSync *twinwardv1alpha1.SecretSync,
 	source *corev1.Secret,
 ) (ctrl.Result, error) {
 	targetKey := types.NamespacedName{
-		Namespace: secretCopy.Spec.Target.Namespace,
-		Name:      secretCopy.Spec.Target.Name,
+		Namespace: secretSync.Spec.Target.Namespace,
+		Name:      secretSync.Spec.Target.Name,
 	}
 	target := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -242,30 +255,30 @@ func (r *SecretCopyReconciler) createTarget(
 			Name:      targetKey.Name,
 		},
 	}
-	applySourceContent(target, source, r.ContentHashSalt)
+	applySourceContent(target, source, secretSync.Spec.Target, r.ContentHashSalt)
 	if err := controllerutil.SetControllerReference(
-		secretCopy,
+		secretSync,
 		target,
 		r.Scheme,
 		controllerutil.WithBlockOwnerDeletion(false),
 	); err != nil {
-		statusErr := r.setReady(ctx, secretCopy, metav1.ConditionFalse, reasonTargetCreateFailed,
+		statusErr := r.setReady(ctx, secretSync, metav1.ConditionFalse, reasonTargetCreateFailed,
 			fmt.Sprintf("failed to configure ownership for target Secret %s", targetKey.String()),
-			source.UID, secretCopy.Status.TargetUID, false)
+			source.UID, secretSync.Status.TargetUID, false)
 		return ctrl.Result{}, errors.Join(err, statusErr)
 	}
 
 	if err := r.Create(ctx, target); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			syncAttempts.WithLabelValues("blocked", reasonTargetAlreadyExists).Inc()
-			return ctrl.Result{}, r.setReady(ctx, secretCopy, metav1.ConditionFalse, reasonTargetAlreadyExists,
+			return ctrl.Result{}, r.setReady(ctx, secretSync, metav1.ConditionFalse, reasonTargetAlreadyExists,
 				fmt.Sprintf("target Secret %s already exists and will not be adopted", targetKey.String()),
-				source.UID, secretCopy.Status.TargetUID, false)
+				source.UID, secretSync.Status.TargetUID, false)
 		}
 		syncAttempts.WithLabelValues("error", reasonTargetCreateFailed).Inc()
-		statusErr := r.setReady(ctx, secretCopy, metav1.ConditionFalse, reasonTargetCreateFailed,
+		statusErr := r.setReady(ctx, secretSync, metav1.ConditionFalse, reasonTargetCreateFailed,
 			fmt.Sprintf("failed to create target Secret %s", targetKey.String()),
-			source.UID, secretCopy.Status.TargetUID, false)
+			source.UID, secretSync.Status.TargetUID, false)
 		return ctrl.Result{}, errors.Join(err, statusErr)
 	}
 
@@ -273,15 +286,23 @@ func (r *SecretCopyReconciler) createTarget(
 	log.InfoContext(ctx, "created target Secret", "source", sourceKey.String(), "target", targetKey.String())
 	syncAttempts.WithLabelValues("success", reasonTargetCreated).Inc()
 	if r.Recorder != nil {
-		r.Recorder.Eventf(target, corev1.EventTypeNormal, "SecretCopied", "Copied content from %s", sourceKey.String())
+		r.Recorder.Eventf(
+			target,
+			nil,
+			corev1.EventTypeNormal,
+			"SecretCopied",
+			"Create",
+			"Copied content from %s",
+			sourceKey.String(),
+		)
 	}
-	return ctrl.Result{}, r.setReady(ctx, secretCopy, metav1.ConditionTrue, reasonTargetCreated,
+	return ctrl.Result{}, r.setReady(ctx, secretSync, metav1.ConditionTrue, reasonTargetCreated,
 		fmt.Sprintf("created target Secret %s", targetKey.String()), source.UID, target.UID, true)
 }
 
-func (r *SecretCopyReconciler) setReady(
+func (r *SecretSyncReconciler) setReady(
 	ctx context.Context,
-	secretCopy *twinwardv1alpha1.SecretCopy,
+	secretSync *twinwardv1alpha1.SecretSync,
 	status metav1.ConditionStatus,
 	reason string,
 	message string,
@@ -289,67 +310,68 @@ func (r *SecretCopyReconciler) setReady(
 	targetUID types.UID,
 	markSynced bool,
 ) error {
-	before := secretCopy.DeepCopy()
-	secretCopy.Status.ObservedGeneration = secretCopy.Generation
-	secretCopy.Status.SourceUID = sourceUID
-	secretCopy.Status.TargetUID = targetUID
+	before := secretSync.DeepCopy()
+	secretSync.Status.ObservedGeneration = secretSync.Generation
+	secretSync.Status.SourceUID = sourceUID
+	secretSync.Status.TargetUID = targetUID
 	if markSynced {
 		now := metav1.Now()
-		secretCopy.Status.LastSyncTime = &now
+		secretSync.Status.LastSyncTime = &now
 	}
-	meta.SetStatusCondition(&secretCopy.Status.Conditions, metav1.Condition{
+	meta.SetStatusCondition(&secretSync.Status.Conditions, metav1.Condition{
 		Type:               twinwardv1alpha1.ReadyCondition,
 		Status:             status,
-		ObservedGeneration: secretCopy.Generation,
+		ObservedGeneration: secretSync.Generation,
 		Reason:             reason,
 		Message:            message,
 	})
-	if equality.Semantic.DeepEqual(before.Status, secretCopy.Status) {
+	if equality.Semantic.DeepEqual(before.Status, secretSync.Status) {
 		return nil
 	}
-	return r.Status().Patch(ctx, secretCopy, client.MergeFrom(before))
+	return r.Status().Patch(ctx, secretSync, client.MergeFrom(before))
 }
 
-func (r *SecretCopyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager registers the SecretSync controller and Secret watches.
+func (r *SecretSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if len(r.ContentHashSalt) != contentHashSaltSize {
 		return fmt.Errorf("content hash salt must be %d bytes", contentHashSaltSize)
 	}
 
 	ctx := context.Background()
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &twinwardv1alpha1.SecretCopy{}, sourceSecretIndex, func(object client.Object) []string {
-		secretCopy := object.(*twinwardv1alpha1.SecretCopy)
-		return []string{secretRefKey(secretCopy.Spec.Source.Namespace, secretCopy.Spec.Source.Name)}
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &twinwardv1alpha1.SecretSync{}, sourceSecretIndex, func(object client.Object) []string {
+		secretSync := object.(*twinwardv1alpha1.SecretSync)
+		return []string{secretRefKey(secretSync.Spec.Source.Namespace, secretSync.Spec.Source.Name)}
 	}); err != nil {
-		return fmt.Errorf("index SecretCopy sources: %w", err)
+		return fmt.Errorf("index SecretSync sources: %w", err)
 	}
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &twinwardv1alpha1.SecretCopy{}, targetSecretIndex, func(object client.Object) []string {
-		secretCopy := object.(*twinwardv1alpha1.SecretCopy)
-		return []string{secretRefKey(secretCopy.Spec.Target.Namespace, secretCopy.Spec.Target.Name)}
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &twinwardv1alpha1.SecretSync{}, targetSecretIndex, func(object client.Object) []string {
+		secretSync := object.(*twinwardv1alpha1.SecretSync)
+		return []string{secretRefKey(secretSync.Spec.Target.Namespace, secretSync.Spec.Target.Name)}
 	}); err != nil {
-		return fmt.Errorf("index SecretCopy targets: %w", err)
+		return fmt.Errorf("index SecretSync targets: %w", err)
 	}
 
 	secretMetadata := &metav1.PartialObjectMetadata{}
 	secretMetadata.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&twinwardv1alpha1.SecretCopy{}).
-		WatchesMetadata(secretMetadata, handler.EnqueueRequestsFromMapFunc(r.secretCopiesForSecret)).
+		For(&twinwardv1alpha1.SecretSync{}).
+		WatchesMetadata(secretMetadata, handler.EnqueueRequestsFromMapFunc(r.secretSyncsForSecret)).
 		Complete(r)
 }
 
-func (r *SecretCopyReconciler) secretCopiesForSecret(ctx context.Context, object client.Object) []reconcile.Request {
+func (r *SecretSyncReconciler) secretSyncsForSecret(ctx context.Context, object client.Object) []reconcile.Request {
 	key := secretRefKey(object.GetNamespace(), object.GetName())
 	requests := make([]reconcile.Request, 0, 2)
 	seen := make(map[string]struct{})
 	for _, index := range []string{sourceSecretIndex, targetSecretIndex} {
-		var copies twinwardv1alpha1.SecretCopyList
-		if err := r.List(ctx, &copies, client.MatchingFields{index: key}); err != nil {
-			logging.FromContext(ctx).ErrorContext(ctx, "unable to map Secret to SecretCopy resources",
+		var syncs twinwardv1alpha1.SecretSyncList
+		if err := r.List(ctx, &syncs, client.MatchingFields{index: key}); err != nil {
+			logging.FromContext(ctx).ErrorContext(ctx, "unable to map Secret to SecretSync resources",
 				"error", err, "secret", client.ObjectKeyFromObject(object).String(), "index", index)
 			continue
 		}
-		for i := range copies.Items {
-			name := copies.Items[i].Name
+		for i := range syncs.Items {
+			name := syncs.Items[i].Name
 			if _, ok := seen[name]; ok {
 				continue
 			}
@@ -364,7 +386,11 @@ func secretRefKey(namespace, name string) string {
 	return namespace + "/" + name
 }
 
-func applySourceContent(target, source *corev1.Secret, salt []byte) {
+func applySourceContent(
+	target, source *corev1.Secret,
+	targetRef twinwardv1alpha1.TargetSecretReference,
+	salt []byte,
+) {
 	target.Type = source.Type
 	target.Data = cloneData(source.Data)
 	target.StringData = nil
@@ -374,10 +400,43 @@ func applySourceContent(target, source *corev1.Secret, salt []byte) {
 	target.Annotations[lastSyncSource] = types.NamespacedName{Namespace: source.Namespace, Name: source.Name}.String()
 	target.Annotations[lastSyncSourceUID] = string(source.UID)
 	target.Annotations[lastSyncHash] = contentHash(source, salt)
+	applyMetadataDirectives(target.Labels, targetRef.Labels)
+	applyMetadataDirectives(target.Annotations, targetRef.Annotations)
 }
 
 func equalSecretContent(source, target *corev1.Secret) bool {
 	return source.Type == target.Type && mapsEqual(source.Data, target.Data)
+}
+
+func metadataDirectivesMatch(target *corev1.Secret, targetRef twinwardv1alpha1.TargetSecretReference) bool {
+	return metadataMapMatches(target.Labels, targetRef.Labels) &&
+		metadataMapMatches(target.Annotations, targetRef.Annotations)
+}
+
+func metadataMapMatches(actual map[string]string, directives map[string]*string) bool {
+	for key, desired := range directives {
+		actualValue, exists := actual[key]
+		if desired == nil {
+			if exists {
+				return false
+			}
+			continue
+		}
+		if !exists || actualValue != *desired {
+			return false
+		}
+	}
+	return true
+}
+
+func applyMetadataDirectives(target map[string]string, directives map[string]*string) {
+	for key, value := range directives {
+		if value == nil {
+			delete(target, key)
+			continue
+		}
+		target[key] = *value
+	}
 }
 
 func mapsEqual(left, right map[string][]byte) bool {

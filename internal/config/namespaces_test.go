@@ -2,7 +2,14 @@ package config
 
 import "testing"
 
-func TestNamespacePolicyAllowsExactAndWildcardPatterns(t *testing.T) {
+func Test_namespacePolicy(t *testing.T) {
+	t.Run("allows exact and wildcard patterns", testNamespacePolicyAllowsExactAndWildcardPatterns)
+	t.Run("defaults to no namespaces", testNamespacePolicyDefaultsToNoNamespaces)
+	t.Run("explicit wildcard allows all namespaces", testNamespacePolicyExplicitWildcardAllowsAllNamespaces)
+	t.Run("rejects invalid pattern", testNamespacePolicyRejectsInvalidPattern)
+}
+
+func testNamespacePolicyAllowsExactAndWildcardPatterns(t *testing.T) {
 	policy, err := NewNamespacePolicy("default,team-*,prod-?")
 	if err != nil {
 		t.Fatalf("NewNamespacePolicy() error = %v", err)
@@ -18,13 +25,15 @@ func TestNamespacePolicyAllowsExactAndWildcardPatterns(t *testing.T) {
 	}
 
 	for namespace, want := range tests {
-		if got := policy.Allows(namespace); got != want {
-			t.Errorf("Allows(%q) = %v, want %v", namespace, got, want)
-		}
+		t.Run(namespace, func(t *testing.T) {
+			if got := policy.Allows(namespace); got != want {
+				t.Errorf("Allows(%q) = %v, want %v", namespace, got, want)
+			}
+		})
 	}
 }
 
-func TestNamespacePolicyDefaultsToNoNamespaces(t *testing.T) {
+func testNamespacePolicyDefaultsToNoNamespaces(t *testing.T) {
 	policy, err := NewNamespacePolicy("")
 	if err != nil {
 		t.Fatalf("NewNamespacePolicy() error = %v", err)
@@ -38,7 +47,7 @@ func TestNamespacePolicyDefaultsToNoNamespaces(t *testing.T) {
 	}
 }
 
-func TestNamespacePolicyExplicitWildcardAllowsAllNamespaces(t *testing.T) {
+func testNamespacePolicyExplicitWildcardAllowsAllNamespaces(t *testing.T) {
 	policy, err := NewNamespacePolicy("*")
 	if err != nil {
 		t.Fatalf("NewNamespacePolicy() error = %v", err)
@@ -49,7 +58,7 @@ func TestNamespacePolicyExplicitWildcardAllowsAllNamespaces(t *testing.T) {
 	}
 }
 
-func TestNamespacePolicyRejectsInvalidPattern(t *testing.T) {
+func testNamespacePolicyRejectsInvalidPattern(t *testing.T) {
 	if _, err := NewNamespacePolicy("["); err == nil {
 		t.Fatal("expected invalid glob pattern to be rejected")
 	}

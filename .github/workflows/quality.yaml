@@ -1,0 +1,40 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Lint Go
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.11.4
+          args: --timeout=5m
+
+      - name: Install YAML linter
+        run: python3 -m pip install --disable-pip-version-check yamllint==1.38.0
+
+      - name: Lint YAML
+        run: make lint-yaml
+
+      - name: Test
+        run: make test

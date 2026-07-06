@@ -1,3 +1,4 @@
+// Package main starts the Twinward controller manager.
 package main
 
 import (
@@ -67,21 +68,21 @@ func main() {
 		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         leaderElection,
-		LeaderElectionID:       "twinward.io",
+		LeaderElectionID:       twinwardv1alpha1.GroupName,
 	})
 	if err != nil {
 		log.Error("unable to start manager", "error", err)
 		os.Exit(1)
 	}
 
-	if err := (&controller.SecretCopyReconciler{
+	if err := (&controller.SecretSyncReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		NamespacePolicy: namespacePolicy,
-		Recorder:        mgr.GetEventRecorderFor("twinward"),
+		Recorder:        mgr.GetEventRecorder("twinward"),
 		ContentHashSalt: contentHashSalt,
 	}).SetupWithManager(mgr); err != nil {
-		log.Error("unable to create controller", "error", err, "controller", "SecretCopy")
+		log.Error("unable to create controller", "error", err, "controller", "SecretSync")
 		os.Exit(1)
 	}
 
@@ -94,7 +95,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("starting manager", "kind", twinwardv1alpha1.GroupVersion.WithKind("SecretCopy").String())
+	log.Info("starting manager", "kind", twinwardv1alpha1.GroupVersion.WithKind(twinwardv1alpha1.SecretSyncKind).String())
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error("problem running manager", "error", err)
 		os.Exit(1)

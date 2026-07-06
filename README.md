@@ -3,17 +3,17 @@
 ![Twinward gopher duplicating a secret painting](docs/assets/twinward-gopher-painter-logo.png)
 
 Twinward is a Kubernetes operator that continuously copies Secret content
-according to centrally managed `SecretCopy` resources.
+according to centrally managed `SecretSync` resources.
 
-## SecretCopy
+## SecretSync
 
-`SecretCopy` is a cluster-scoped resource intended to be managed by the
+`SecretSync` is a cluster-scoped resource intended to be managed by the
 platform engineering team. It identifies one source Secret by namespace, name,
 and immutable Kubernetes UID, and one target by namespace and name:
 
 ```yaml
-apiVersion: twinward.io/v1alpha1
-kind: SecretCopy
+apiVersion: twinward.weisshorn.cyd/v1alpha1
+kind: SecretSync
 metadata:
   name: team-a-db-password-to-team-b
 spec:
@@ -24,6 +24,12 @@ spec:
   target:
     namespace: team-b
     name: db-password-copy
+    labels:
+      app.kubernetes.io/part-of: example-application
+      obsolete.example.com/label: ~
+    annotations:
+      example.com/owner: platform-team
+      obsolete.example.com/annotation: ~
 ```
 
 Obtain the source UID with:
@@ -34,8 +40,8 @@ kubectl get secret db-password -n team-a \
 ```
 
 The target must not exist initially. Twinward never adopts a pre-existing
-Secret. After creating the target, Twinward sets the `SecretCopy` as its
-controller owner and continuously synchronizes it. Deleting the `SecretCopy`
+Secret. After creating the target, Twinward sets the `SecretSync` as its
+controller owner and continuously synchronizes it. Deleting the `SecretSync`
 causes Kubernetes garbage collection to delete the owned target.
 
 The source UID prevents a deleted source from being silently replaced by a
@@ -48,11 +54,19 @@ The operator copies `type` and `data` from the source Secret into the target
 Secret. It preserves other target metadata and adds:
 
 - `app.kubernetes.io/managed-by=twinward`
-- `twinward.io/last-sync-source`
-- `twinward.io/last-sync-source-uid`
-- `twinward.io/last-sync-hash`
+- `twinward.weisshorn.cyd/last-sync-source`
+- `twinward.weisshorn.cyd/last-sync-source-uid`
+- `twinward.weisshorn.cyd/last-sync-hash`
 
-Immutable target Secrets are not modified.
+`spec.target.labels` and `spec.target.annotations` customize target metadata.
+A string value adds or replaces a key, while YAML `~` (null) removes it. Keys
+not listed in these maps are preserved. These directives remain editable after
+creation; the target namespace and name remain immutable. Explicit directives
+also take precedence over Twinward's metadata above, so those keys can be
+replaced or removed when necessary.
+
+Immutable target Secrets do not have their type or data modified. Their metadata
+directives can still be reconciled.
 
 The sync hash is keyed with a cryptographically random, per-process salt. The
 salt remains in memory and is not written to Kubernetes. Consequently, hash
@@ -60,7 +74,7 @@ values are not stable across controller restarts.
 
 ## Status
 
-`SecretCopy` exposes a standard `Ready` condition and records the observed
+`SecretSync` exposes a standard `Ready` condition and records the observed
 source UID, target UID, generation, and last successful synchronization time.
 Common condition reasons include:
 
@@ -79,8 +93,8 @@ Common condition reasons include:
 Inspect status with:
 
 ```sh
-kubectl get secretcopies
-kubectl describe secretcopy team-a-db-password-to-team-b
+kubectl get secretsyncs
+kubectl describe secretsync team-a-db-password-to-team-b
 ```
 
 ## Namespace Allowlist
@@ -123,7 +137,8 @@ kubectl apply -f config/crd.yaml
 kubectl apply -f config/manifests.yaml
 ```
 
-See `config/sample-secretcopy.yaml` for an example source and copy policy.
+See `config/sample-secretsync.yaml` for an example source and synchronization
+policy.
 
 Optional Prometheus Operator integration:
 

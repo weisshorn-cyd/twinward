@@ -14,11 +14,11 @@ kind: ClusterRole
 metadata:
   name: twinward
 rules:
-  - apiGroups: ["twinward.io"]
-    resources: ["secretcopies"]
+  - apiGroups: ["twinward.weisshorn.cyd"]
+    resources: ["secretsyncs"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["twinward.io"]
-    resources: ["secretcopies/status"]
+  - apiGroups: ["twinward.weisshorn.cyd"]
+    resources: ["secretsyncs/status"]
     verbs: ["get", "patch", "update"]
   - apiGroups: [""]
     resources: ["secrets"]

@@ -1,3 +1,4 @@
+// Package config provides runtime configuration for Twinward.
 package config
 
 import (
@@ -6,12 +7,15 @@ import (
 	"strings"
 )
 
+// AllowedNamespacesEnv names the environment variable containing allowed namespace patterns.
 const AllowedNamespacesEnv = "ALLOWED_NAMESPACES"
 
+// NamespacePolicy determines whether namespaces match configured glob patterns.
 type NamespacePolicy struct {
 	patterns []string
 }
 
+// NewNamespacePolicy parses a comma-separated list of namespace glob patterns.
 func NewNamespacePolicy(raw string) (NamespacePolicy, error) {
 	patterns := splitCSV(raw)
 
@@ -27,6 +31,7 @@ func NewNamespacePolicy(raw string) (NamespacePolicy, error) {
 	return NamespacePolicy{patterns: patterns}, nil
 }
 
+// Allows reports whether a namespace matches at least one configured pattern.
 func (p NamespacePolicy) Allows(namespace string) bool {
 	for _, pattern := range p.patterns {
 		matched, err := filepath.Match(pattern, namespace)
@@ -37,6 +42,7 @@ func (p NamespacePolicy) Allows(namespace string) bool {
 	return false
 }
 
+// Patterns returns a copy of the configured namespace glob patterns.
 func (p NamespacePolicy) Patterns() []string {
 	return append([]string(nil), p.patterns...)
 }

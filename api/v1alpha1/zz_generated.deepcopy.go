@@ -7,60 +7,95 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-func (in *SecretCopy) DeepCopyInto(out *SecretCopy) {
+func (in *SecretSync) DeepCopyInto(out *SecretSync) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
+	in.Spec.DeepCopyInto(&out.Spec)
 	in.Status.DeepCopyInto(&out.Status)
 }
 
-func (in *SecretCopy) DeepCopy() *SecretCopy {
+func (in *SecretSync) DeepCopy() *SecretSync {
 	if in == nil {
 		return nil
 	}
-	out := new(SecretCopy)
+	out := new(SecretSync)
 	in.DeepCopyInto(out)
 	return out
 }
 
-func (in *SecretCopy) DeepCopyObject() runtime.Object {
+func (in *SecretSync) DeepCopyObject() runtime.Object {
 	if copy := in.DeepCopy(); copy != nil {
 		return copy
 	}
 	return nil
 }
 
-func (in *SecretCopyList) DeepCopyInto(out *SecretCopyList) {
+func (in *SecretSyncList) DeepCopyInto(out *SecretSyncList) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
-		*out = make([]SecretCopy, len(*in))
+		*out = make([]SecretSync, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
 }
 
-func (in *SecretCopyList) DeepCopy() *SecretCopyList {
+func (in *SecretSyncList) DeepCopy() *SecretSyncList {
 	if in == nil {
 		return nil
 	}
-	out := new(SecretCopyList)
+	out := new(SecretSyncList)
 	in.DeepCopyInto(out)
 	return out
 }
 
-func (in *SecretCopyList) DeepCopyObject() runtime.Object {
+func (in *SecretSyncList) DeepCopyObject() runtime.Object {
 	if copy := in.DeepCopy(); copy != nil {
 		return copy
 	}
 	return nil
 }
 
-func (in *SecretCopyStatus) DeepCopyInto(out *SecretCopyStatus) {
+func (in *SecretSyncSpec) DeepCopyInto(out *SecretSyncSpec) {
+	*out = *in
+	in.Target.DeepCopyInto(&out.Target)
+}
+
+func (in *TargetSecretReference) DeepCopyInto(out *TargetSecretReference) {
+	*out = *in
+	if in.Labels != nil {
+		in, out := &in.Labels, &out.Labels
+		*out = make(map[string]*string, len(*in))
+		for key, val := range *in {
+			var outVal *string
+			if val != nil {
+				in, out := &val, &outVal
+				*out = new(string)
+				**out = **in
+			}
+			(*out)[key] = outVal
+		}
+	}
+	if in.Annotations != nil {
+		in, out := &in.Annotations, &out.Annotations
+		*out = make(map[string]*string, len(*in))
+		for key, val := range *in {
+			var outVal *string
+			if val != nil {
+				in, out := &val, &outVal
+				*out = new(string)
+				**out = **in
+			}
+			(*out)[key] = outVal
+		}
+	}
+}
+
+func (in *SecretSyncStatus) DeepCopyInto(out *SecretSyncStatus) {
 	*out = *in
 	if in.LastSyncTime != nil {
 		in, out := &in.LastSyncTime, &out.LastSyncTime

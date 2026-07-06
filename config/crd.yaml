@@ -1,17 +1,17 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: secretcopies.twinward.io
+  name: secretsyncs.twinward.weisshorn.cyd
 spec:
-  group: twinward.io
+  group: twinward.weisshorn.cyd
   scope: Cluster
   names:
-    plural: secretcopies
-    singular: secretcopy
-    kind: SecretCopy
-    listKind: SecretCopyList
+    plural: secretsyncs
+    singular: secretsync
+    kind: SecretSync
+    listKind: SecretSyncList
     shortNames:
-      - scopy
+      - ssync
   versions:
     - name: v1alpha1
       served: true
@@ -37,7 +37,7 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            SecretCopy continuously copies the type and data of one UID-pinned
+            SecretSync continuously copies the type and data of one UID-pinned
             source Secret into one target Secret created and owned by Twinward.
             It is cluster-scoped and intended to be managed centrally by the
             platform engineering team.
@@ -53,15 +53,16 @@ spec:
               type: object
             spec:
               description: >-
-                Desired source-to-target Secret copy. The target reference is
-                immutable after creation.
+                Desired source-to-target Secret synchronization. The target
+                namespace and name are immutable after creation; target
+                metadata directives remain editable.
               type: object
               required:
                 - source
                 - target
               x-kubernetes-validations:
-                - rule: "self.target == oldSelf.target"
-                  message: target is immutable; create a new SecretCopy instead
+                - rule: "self.target.namespace == oldSelf.target.namespace && self.target.name == oldSelf.target.name"
+                  message: target namespace and name are immutable; create a new SecretSync instead
               properties:
                 source:
                   description: >-
@@ -114,6 +115,24 @@ spec:
                       type: string
                       minLength: 1
                       maxLength: 253
+                    labels:
+                      description: >-
+                        Labels to set on or remove from the target Secret. A
+                        string value sets the label and null removes it. Labels
+                        not listed here are preserved.
+                      type: object
+                      additionalProperties:
+                        type: string
+                        nullable: true
+                    annotations:
+                      description: >-
+                        Annotations to set on or remove from the target Secret.
+                        A string value sets the annotation and null removes it.
+                        Annotations not listed here are preserved.
+                      type: object
+                      additionalProperties:
+                        type: string
+                        nullable: true
             status:
               description: >-
                 Observed identities and latest reconciliation result. This
@@ -121,7 +140,7 @@ spec:
               type: object
               properties:
                 observedGeneration:
-                  description: SecretCopy generation reflected by this status.
+                  description: SecretSync generation reflected by this status.
                   type: integer
                   format: int64
                 sourceUID:
@@ -173,7 +192,7 @@ spec:
                         type: string
                         maxLength: 32768
                       observedGeneration:
-                        description: SecretCopy generation evaluated for this condition.
+                        description: SecretSync generation evaluated for this condition.
                         type: integer
                         format: int64
                       reason:

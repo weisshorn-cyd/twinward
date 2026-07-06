@@ -1,3 +1,4 @@
+// Package logging configures and retrieves Twinward's structured logger.
 package logging
 
 import (
